@@ -37,7 +37,7 @@ class LoginDialog(QDialog):
         user_id = self.id_input.text()
         password = self.password_input.text()
 
-        if user_id == "admin" and password == "12345":
+        if user_id == "admin" and password == "123456":
             self.accept()  # 로그인 성공
         else:
             # 로그인 실패 메시지
