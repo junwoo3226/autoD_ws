@@ -4,10 +4,10 @@ from geometry_msgs.msg import Twist
 import cv2
 import os
 from ultralytics import YOLO
-from collections import defaultdict
+from collections import defaultdict, deque
 import numpy as np
 import threading
-import queue
+from std_msgs.msg import String
 
 # TurtleBot3 속도 제한 값
 BURGER_MAX_LIN_VEL = 0.22
@@ -63,6 +63,7 @@ def process_frame(annotated_frame, results, pub):
                 target_linear_velocity = 0.0
                 target_angular_velocity = 0.0
                 print(f"중앙에 객체(ID={track_id}) 감지됨! Stopped")
+                
 
             # Twist 메시지 생성 및 발행
             twist = Twist()
@@ -71,30 +72,34 @@ def process_frame(annotated_frame, results, pub):
             pub.publish(twist)
             return
 
-def capture_frames(cap, frame_queue):
+
+
+def capture_frames(cap, frame_deque):
     while rclpy.ok():
         ret, frame = cap.read()
         if not ret:
             print("Failed to capture frame from webcam.")
             break
-        if not frame_queue.full():
-            frame_queue.put(frame)
+        if len(frame_deque) < frame_deque.maxlen:
+            frame_deque.append(frame)
+        else:
+            frame_deque.popleft()  # 오래된 프레임을 제거하고 새로운 프레임을 추가
 
-def process_frames(frame_queue, result_queue, model):
+def process_frames(frame_deque, result_deque, model):
     while rclpy.ok():
-        if not frame_queue.empty():
-            frame = frame_queue.get()
+        if frame_deque:
+            frame = frame_deque.popleft()  # 가장 오래된 프레임을 가져옴
             results = model.track(source=frame, persist=True, conf=0.5)
-            
-            # results = model.track(source=cv2.resize(frame, (160, 120)), persist=True, conf=0.5)
 
-            if not result_queue.full():
-                result_queue.put((frame, results))
+            if len(result_deque) < result_deque.maxlen:
+                result_deque.append((frame, results))
+            else:
+                result_deque.popleft()  # 오래된 처리된 결과 제거
 
-def publish_results(result_queue, node, track_history):
+def publish_results(result_deque, node, track_history):
     while rclpy.ok():
-        if not result_queue.empty():
-            frame, results = result_queue.get()
+        if result_deque:
+            frame, results = result_deque.popleft()
             if results and results[0].boxes:
                 annotated_frame = results[0].plot()
 
@@ -120,15 +125,29 @@ def publish_results(result_queue, node, track_history):
 
 
 
+
 class TurtleBot3Controller(Node):
+
     def __init__(self):
         super().__init__('turtlebot3_controller')
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.subscriber_ = self.create_subscription(String, 'start_tracking', self.start_tracking_callback, 10)  # Subscriber 추가
         self.get_logger().info("TurtleBot3 controller node started.")
+        
+        self.is_tracking_active = False  # 로직 활성화 상태 플래그
+
+    def start_tracking_callback(self, msg):
+        """start_tracking 토픽 수신 시 로직 활성화"""
+        if msg.data == "start":
+            self.is_tracking_active = True
+            self.get_logger().info("Tracking logic activated.")
+        else:
+            self.is_tracking_active = False
+            self.get_logger().info("Tracking logic deactivated.")
 
     def publish_velocity(self, annotated_frame, results):
-        process_frame(annotated_frame, results, self.publisher_)
-
+        if self.is_tracking_active:  # 로직이 활성화된 경우에만 실행
+            process_frame(annotated_frame, results, self.publisher_)
 
 
 def main():
@@ -143,13 +162,15 @@ def main():
     model = YOLO('/home/rokey8/rokey8_D5_ws/src/fire/fire/best.pt')
     track_history = defaultdict(lambda: [])
 
-    frame_queue = queue.Queue(maxsize=5)
-    result_queue = queue.Queue(maxsize=5)
+
+    # deque로 변경, maxlen을 지정하여 큐 크기를 제한
+    frame_deque = deque(maxlen=5)
+    result_deque = deque(maxlen=5)
 
     # 스레드 생성
-    capture_thread = threading.Thread(target=capture_frames, args=(cap, frame_queue), daemon=True)
-    process_thread = threading.Thread(target=process_frames, args=(frame_queue, result_queue, model), daemon=True)
-    publish_thread = threading.Thread(target=publish_results, args=(result_queue, node, track_history), daemon=True)
+    capture_thread = threading.Thread(target=capture_frames, args=(cap, frame_deque), daemon=True)
+    process_thread = threading.Thread(target=process_frames, args=(frame_deque, result_deque, model), daemon=True)
+    publish_thread = threading.Thread(target=publish_results, args=(result_deque, node, track_history), daemon=True)
 
     # 스레드 생성 여부 확인
     print("스레드 생성 여부 확인")
