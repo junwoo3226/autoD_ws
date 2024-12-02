@@ -191,8 +191,9 @@ def resource_path(relative_path):
     base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
+# ui파일 경로 확인!!
 #form = resource_path('control_robot.ui')
-form = '/home/ryu/odegi_ws/src/odegi_fire/odegi_fire/control_robot.ui'
+form = '/home/jw/odegi_ws/src/odegi_fire/odegi_fire/control_robot.ui'
 form_class = uic.loadUiType(form)[0]
 
 
